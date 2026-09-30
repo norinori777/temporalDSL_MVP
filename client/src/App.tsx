@@ -1,28 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import {
-  addEdge,
-  Background,
-  Controls,
-  Handle,
-  Position,
-  ReactFlow,
-  ReactFlowProvider,
-  useEdgesState,
-  useNodesState,
-  type Connection,
-  type Edge,
-  type Node,
-  type NodeProps,
-} from '@xyflow/react'
-import { Activity, ArrowDown, Check, CheckCircle2, ChevronDown, CircleHelp, Clock3, Cloud, FileText, GitBranch, MonitorPlay, Plus, Play, Radio, Save, Settings2, Webhook, Workflow, Zap } from 'lucide-react'
-import '@xyflow/react/dist/style.css'
+import { useEffect, useMemo, useState } from 'react'
+import { Activity, ArrowDown, Check, CheckCircle2, ChevronDown, CircleHelp, Clock3, Cloud, FileText, GitBranch, MonitorPlay, Plus, Play, Radio, Save, Settings2, Undo2, Webhook, Workflow, Zap } from 'lucide-react'
 import './App.css'
 import DemoPage from './DemoPages.js'
 import ExecutionView from './ExecutionView.js'
 
 type NodeKind = 'trigger' | 'delay' | 'webhook' | 'approval' | 'page' | 'input' | 'condition'
 type StepData = { label: string; seconds?: number; url?: string; method?: 'GET' | 'POST'; conditionField?: 'inputA' | 'inputB'; conditionOperator?: string; conditionValue?: string }
-type FlowNode = Node<StepData, NodeKind>
+type FlowNode = { id: string; type: NodeKind; position: { x: number; y: number }; data: StepData }
+type FlowEdge = { id: string; source: string; target: string; sourceHandle?: string }
+const returnHandles = new Set(['ng-return', 'no-return'])
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:4000'
 const workflowId = 'customer-onboarding'
@@ -31,10 +17,31 @@ const starterNodes: FlowNode[] = [
   { id: 'start', type: 'trigger', position: { x: 340, y: 72 }, data: { label: '顧客登録' } },
   { id: 'delay', type: 'delay', position: { x: 340, y: 248 }, data: { label: '初回フォローまで待機', seconds: 10 } },
 ]
-const starterEdges: Edge[] = [{ id: 'start-delay', source: 'start', target: 'delay', animated: true }]
+const starterEdges: FlowEdge[] = [{ id: 'start-delay', source: 'start', target: 'delay' }]
 
-function FlowStep({ data, type, selected }: NodeProps<FlowNode>) {
-  const details = type === 'trigger'
+function getPreviousNodes(nodeId: string, nodes: FlowNode[], edges: FlowEdge[]) {
+  const previousIds = new Set<string>()
+  const pending = [nodeId]
+  while (pending.length > 0) {
+    const target = pending.pop()!
+    for (const edge of edges) {
+      if (edge.target !== target || returnHandles.has(edge.sourceHandle ?? '') || previousIds.has(edge.source)) continue
+      previousIds.add(edge.source)
+      pending.push(edge.source)
+    }
+  }
+  return nodes.filter((node) => node.id !== nodeId && node.type !== 'trigger' && previousIds.has(node.id))
+}
+
+function WorkflowReturnNote({ targetId, nodes, onSelect }: { targetId: string; nodes: FlowNode[]; onSelect: (id: string) => void }) {
+  const target = nodes.find((node) => node.id === targetId)
+  if (!target) return null
+  return <button type="button" className="workflow-return-note" onClick={() => onSelect(target.id)}><Undo2 size={13} />前の工程へ戻る：{target.data.label}</button>
+}
+
+function WorkflowBlock({ node, selected, onSelect, detailsOverride }: { node: FlowNode; selected: boolean; onSelect: () => void; detailsOverride?: string }) {
+  const { data, type } = node
+  const details = detailsOverride ?? (type === 'trigger'
     ? 'イベントで開始'
     : type === 'delay'
       ? `${data.seconds ?? 1} 秒待機`
@@ -46,30 +53,65 @@ function FlowStep({ data, type, selected }: NodeProps<FlowNode>) {
             ? `${data.conditionField ?? 'inputA'} ${data.conditionOperator ?? 'equals'} ${data.conditionValue || '値を設定'}`
           : type === 'input'
             ? '入力A: 文字列 · 入力B: 数字'
-            : 'はいで次へ · いいえで終了'
+            : 'はいで次へ · いいえで終了')
     const icon = type === 'trigger' ? <Zap size={16} /> : type === 'delay' ? <Clock3 size={16} /> : type === 'webhook' ? <Webhook size={16} /> : type === 'page' ? <MonitorPlay size={16} /> : type === 'input' ? <FileText size={16} /> : type === 'condition' ? <GitBranch size={16} /> : <CheckCircle2 size={16} />
     const kind = type === 'trigger' ? 'トリガー' : type === 'delay' ? 'タイマー' : type === 'webhook' ? 'Webhook送信' : type === 'page' ? '画面表示' : type === 'input' ? '入力' : type === 'condition' ? '条件分岐' : '承認'
 
   return (
-    <div className={`flow-node flow-node--${type}${selected ? ' is-selected' : ''}`}>
-      {type !== 'trigger' && <Handle type="target" position={Position.Top} />}
-      <div className="flow-node__icon">{icon}</div>
-      <div className="flow-node__copy">
-        <span className="flow-node__kind">{kind}</span>
+    <button type="button" className={`workflow-block workflow-block--${type}${selected ? ' is-selected' : ''}`} onClick={onSelect}>
+      <span className="workflow-block__icon">{icon}</span>
+      <span className="workflow-block__copy">
+        <span className="workflow-block__kind">{kind}</span>
         <strong>{data.label}</strong>
         <small>{details}</small>
-      </div>
-      <span className="flow-node__dots" aria-hidden="true">···</span>
-      {type === 'condition' ? <div className="flow-node__branches"><span>OK</span><span>NG</span><Handle id="ok" type="source" position={Position.Bottom} /><Handle id="ng" type="source" position={Position.Bottom} /></div> : <Handle type="source" position={Position.Bottom} />}
+      </span>
+      <ChevronDown className="workflow-block__select" size={15} />
+    </button>
+  )
+}
+
+function WorkflowStack({ nodeId, nodes, edges, selectedId, onSelect }: {
+  nodeId: string
+  nodes: FlowNode[]
+  edges: FlowEdge[]
+  selectedId: string
+  onSelect: (id: string) => void
+}) {
+  const node = nodes.find((item) => item.id === nodeId)
+  if (!node) return null
+
+  const outgoing = edges.filter((edge) => edge.source === node.id)
+  const approvalReturnTargetId = node.type === 'approval' ? outgoing.find((edge) => edge.sourceHandle === 'no-return')?.target : undefined
+  const renderTarget = (targetId: string | undefined) => targetId
+    ? <WorkflowStack nodeId={targetId} nodes={nodes} edges={edges} selectedId={selectedId} onSelect={onSelect} />
+    : <div className="workflow-branch__empty">設定から分岐先を選択</div>
+
+  return (
+    <div className={`workflow-stack${node.type === 'condition' ? ' workflow-stack--condition' : ''}`}>
+      <WorkflowBlock node={node} selected={selectedId === node.id} onSelect={() => onSelect(node.id)} detailsOverride={approvalReturnTargetId ? 'いいえで前の工程へ戻る' : undefined} />
+      {node.type === 'condition' ? (
+        <div className="workflow-branches">
+          {(['ok', 'ng'] as const).map((branch) => {
+            const branchName = branch === 'ok' ? '条件OK' : '条件NG'
+            const targetId = outgoing.find((edge) => edge.sourceHandle === branch)?.target
+            const returnTargetId = branch === 'ng' ? outgoing.find((edge) => edge.sourceHandle === 'ng-return')?.target : undefined
+            return <section className={`workflow-branch workflow-branch--${branch}`} key={branch}><h3>{branchName}</h3>{returnTargetId ? <WorkflowReturnNote targetId={returnTargetId} nodes={nodes} onSelect={onSelect} /> : renderTarget(targetId)}</section>
+          })}
+        </div>
+      ) : (
+        (() => {
+          const targetId = outgoing.find((edge) => !edge.sourceHandle)?.target
+          const returnTargetId = approvalReturnTargetId
+          return <>{returnTargetId && <WorkflowReturnNote targetId={returnTargetId} nodes={nodes} onSelect={onSelect} />}{targetId && <><div className="workflow-connector"><ArrowDown size={16} /></div>{renderTarget(targetId)}</>}</>
+        })()
+      )}
     </div>
   )
 }
 
-const nodeTypes = { trigger: FlowStep, delay: FlowStep, webhook: FlowStep, approval: FlowStep, page: FlowStep, input: FlowStep, condition: FlowStep }
-
 function WorkflowEditor() {
-  const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>(starterNodes)
-  const [edges, setEdges, onEdgesChange] = useEdgesState(starterEdges)
+  const [nodes, setNodes] = useState<FlowNode[]>(starterNodes)
+  const [edges, setEdges] = useState<FlowEdge[]>(starterEdges)
   const [selectedId, setSelectedId] = useState('delay')
   const [name, setName] = useState('顧客オンボーディング')
   const [saved, setSaved] = useState(false)
@@ -78,6 +120,18 @@ function WorkflowEditor() {
   const [isBusy, setIsBusy] = useState(false)
 
   const selectedNode = useMemo(() => nodes.find((node) => node.id === selectedId), [nodes, selectedId])
+  const orphanRoots = useMemo(() => {
+    const reachable = new Set<string>()
+    const visit = (nodeId: string) => {
+      if (reachable.has(nodeId)) return
+      reachable.add(nodeId)
+      edges.filter((edge) => edge.source === nodeId).forEach((edge) => visit(edge.target))
+    }
+    const startNode = nodes.find((node) => node.type === 'trigger')
+    if (startNode) visit(startNode.id)
+    const orphanIds = new Set(nodes.filter((node) => !reachable.has(node.id)).map((node) => node.id))
+    return nodes.filter((node) => orphanIds.has(node.id) && !edges.some((edge) => edge.target === node.id && orphanIds.has(edge.source)))
+  }, [edges, nodes])
 
   useEffect(() => {
     fetch(`${API_URL}/api/health`)
@@ -86,7 +140,7 @@ function WorkflowEditor() {
     fetch(`${API_URL}/api/workflows`)
       .then(async (response) => {
         if (!response.ok) return
-        const definitions = await response.json() as { id: string; name: string; nodes: FlowNode[]; edges: Edge[] }[]
+        const definitions = await response.json() as { id: string; name: string; nodes: FlowNode[]; edges: FlowEdge[] }[]
         const existing = definitions.find((definition) => definition.id === workflowId)
         if (!existing) return
         setName(existing.name)
@@ -98,11 +152,6 @@ function WorkflowEditor() {
       .catch(() => undefined)
   }, [setEdges, setNodes])
 
-  const onConnect = useCallback((connection: Connection) => {
-    setEdges((current) => addEdge({ ...connection, animated: true }, current))
-    setSaved(false)
-  }, [setEdges])
-
   const updateData = (patch: Partial<StepData>) => {
     if (!selectedNode) return
     setNodes((current) => current.map((node) => node.id === selectedNode.id
@@ -112,14 +161,15 @@ function WorkflowEditor() {
   }
 
   const addStep = (type: Exclude<NodeKind, 'trigger'>) => {
-    const selectedSource = nodes.find((node) => node.id === selectedId)
-    const previous = selectedSource && selectedSource.type !== 'trigger' ? selectedSource : nodes[nodes.length - 1]
-    const usedBranches = new Set(edges.filter((edge) => edge.source === previous?.id).map((edge) => edge.sourceHandle))
-    const sourceHandle = previous?.type === 'condition'
-      ? !usedBranches.has('ok') ? 'ok' : !usedBranches.has('ng') ? 'ng' : undefined
+    const previous = nodes.find((node) => node.id === selectedId) ?? nodes[nodes.length - 1]
+    if (!previous) return
+    const outgoing = edges.filter((edge) => edge.source === previous.id)
+    const usedBranches = new Set(outgoing.map((edge) => edge.sourceHandle))
+    const sourceHandle = previous.type === 'condition'
+      ? !usedBranches.has('ok') ? 'ok' : !usedBranches.has('ng') && !usedBranches.has('ng-return') ? 'ng' : undefined
       : undefined
-    if (previous?.type === 'condition' && !sourceHandle) {
-      setMessage('条件ノードのOK/NG接続先はすでに設定されています')
+    if (previous.type === 'condition' && !sourceHandle) {
+      setMessage('OK/NGの分岐先は設定から選択してください')
       return
     }
     const id = `${type}-${crypto.randomUUID().slice(0, 6)}`
@@ -134,26 +184,38 @@ function WorkflowEditor() {
               : type === 'condition'
                 ? { label: '入力値を判定', conditionField: 'inputA', conditionOperator: 'equals', conditionValue: '' }
                 : { label: '内容を承認' }
-      const branchOffset = sourceHandle === 'ok' ? -150 : sourceHandle === 'ng' ? 150 : 0
-      const position = previous
-        ? { x: previous.position.x + branchOffset, y: previous.position.y + 160 }
-        : { x: 340, y: 248 }
-      setNodes((current) => [...current, { id, type, position, data }])
-      if (previous) setEdges((current) => [...current, { id: `${previous.id}-${sourceHandle ?? 'next'}-${id}`, source: previous.id, target: id, ...(sourceHandle ? { sourceHandle } : {}), animated: true }])
-      setSelectedId(previous?.type === 'condition' ? previous.id : id)
+      setNodes((current) => [...current, { id, type, position: { x: 0, y: current.length * 160 }, data }])
+      const nextEdge = outgoing.find((edge) => !edge.sourceHandle)
+      setEdges((current) => [
+        ...current.filter((edge) => edge !== nextEdge),
+        { id: `${previous.id}-${sourceHandle ?? 'next'}-${id}`, source: previous.id, target: id, ...(sourceHandle ? { sourceHandle } : {}) },
+        ...(nextEdge ? [{ ...nextEdge, source: id }] : []),
+      ])
+      setSelectedId(previous.type === 'condition' ? previous.id : id)
     setSaved(false)
   }
 
-    const setBranchTarget = (branch: 'ok' | 'ng', targetId: string) => {
+    const setBranchTarget = (branch: 'ok' | 'ng', selection: string) => {
       if (selectedNode?.type !== 'condition') return
-      const duplicateTarget = targetId && edges.some((edge) => edge.target === targetId && !(edge.source === selectedNode.id && edge.sourceHandle === branch))
+      const returning = branch === 'ng' && selection.startsWith('return:')
+      const targetId = returning ? selection.slice('return:'.length) : selection
+      const duplicateTarget = targetId && !returning && edges.some((edge) => edge.target === targetId && !returnHandles.has(edge.sourceHandle ?? '') && !(edge.source === selectedNode.id && edge.sourceHandle === branch))
       if (duplicateTarget) {
         setMessage('同じノードを複数の分岐先には指定できません')
         return
       }
       setEdges((current) => [
-        ...current.filter((edge) => !(edge.source === selectedNode.id && edge.sourceHandle === branch)),
-        ...(targetId ? [{ id: `${selectedNode.id}-${branch}-${targetId}`, source: selectedNode.id, target: targetId, sourceHandle: branch, animated: true }] : []),
+        ...current.filter((edge) => !(edge.source === selectedNode.id && (edge.sourceHandle === branch || (branch === 'ng' && edge.sourceHandle === 'ng-return')))),
+        ...(targetId ? [{ id: `${selectedNode.id}-${returning ? 'ng-return' : branch}-${targetId}`, source: selectedNode.id, target: targetId, sourceHandle: returning ? 'ng-return' : branch }] : []),
+      ])
+      setSaved(false)
+    }
+
+    const setApprovalReturnTarget = (targetId: string) => {
+      if (selectedNode?.type !== 'approval') return
+      setEdges((current) => [
+        ...current.filter((edge) => !(edge.source === selectedNode.id && edge.sourceHandle === 'no-return')),
+        ...(targetId ? [{ id: `${selectedNode.id}-no-return-${targetId}`, source: selectedNode.id, target: targetId, sourceHandle: 'no-return' }] : []),
       ])
       setSaved(false)
     }
@@ -230,32 +292,17 @@ function WorkflowEditor() {
       <section className="workspace">
         <aside className="left-rail">
           <div className="rail-section"><span className="rail-label">自動化</span><button className="rail-link is-active"><Workflow size={16} />ワークフロー</button><button className="rail-link"><Activity size={16} />実行履歴 <span className="rail-count">0</span></button></div>
-          <div className="rail-section flow-library"><div className="library-heading"><span className="rail-label">ノードライブラリ</span><button className="tiny-icon" title="ノードを検索"><Plus size={15} /></button></div><p className="library-hint">キャンバスに追加</p><button className="library-item" onClick={() => addStep('delay')}><span className="library-icon library-icon--timer"><Clock3 size={16} /></span><span><strong>待機</strong><small>指定時間だけ停止</small></span><Plus size={14} /></button><button className="library-item" onClick={() => addStep('input')}><span className="library-icon library-icon--input"><FileText size={16} /></span><span><strong>入力</strong><small>文字列と数字を受け取る</small></span><Plus size={14} /></button><button className="library-item" onClick={() => addStep('condition')}><span className="library-icon library-icon--condition"><GitBranch size={16} /></span><span><strong>条件分岐</strong><small>入力値でOK/NGを判定</small></span><Plus size={14} /></button><button className="library-item" onClick={() => addStep('approval')}><span className="library-icon library-icon--approval"><CheckCircle2 size={16} /></span><span><strong>承認</strong><small>はい・いいえを確認</small></span><Plus size={14} /></button><button className="library-item" onClick={() => addStep('page')}><span className="library-icon library-icon--page"><MonitorPlay size={16} /></span><span><strong>画面表示</strong><small>URLを表示して確認</small></span><Plus size={14} /></button><button className="library-item" onClick={() => addStep('webhook')}><span className="library-icon library-icon--webhook"><Webhook size={16} /></span><span><strong>Webhook</strong><small>HTTPリクエスト送信</small></span><Plus size={14} /></button></div>
+          <div className="rail-section flow-library"><div className="library-heading"><span className="rail-label">ノードライブラリ</span><button className="tiny-icon" title="ノードを検索"><Plus size={15} /></button></div><p className="library-hint">選択位置に追加</p><button className="library-item" onClick={() => addStep('delay')}><span className="library-icon library-icon--timer"><Clock3 size={16} /></span><span><strong>待機</strong><small>指定時間だけ停止</small></span><Plus size={14} /></button><button className="library-item" onClick={() => addStep('input')}><span className="library-icon library-icon--input"><FileText size={16} /></span><span><strong>入力</strong><small>文字列と数字を受け取る</small></span><Plus size={14} /></button><button className="library-item" onClick={() => addStep('condition')}><span className="library-icon library-icon--condition"><GitBranch size={16} /></span><span><strong>条件分岐</strong><small>入力値でOK/NGを判定</small></span><Plus size={14} /></button><button className="library-item" onClick={() => addStep('approval')}><span className="library-icon library-icon--approval"><CheckCircle2 size={16} /></span><span><strong>承認</strong><small>はい・いいえを確認</small></span><Plus size={14} /></button><button className="library-item" onClick={() => addStep('page')}><span className="library-icon library-icon--page"><MonitorPlay size={16} /></span><span><strong>画面表示</strong><small>URLを表示して確認</small></span><Plus size={14} /></button><button className="library-item" onClick={() => addStep('webhook')}><span className="library-icon library-icon--webhook"><Webhook size={16} /></span><span><strong>Webhook</strong><small>HTTPリクエスト送信</small></span><Plus size={14} /></button></div>
           <div className="rail-footer"><div className="usage-label"><span>月間実行数</span><span>0 / 1,000</span></div><div className="usage-track"><span /></div><button className="rail-link"><CircleHelp size={15} />ヘルプとガイド</button></div>
         </aside>
 
-        <section className="builder" aria-label="ワークフロー編集キャンバス">
-          <div className="canvas-toolbar"><div className="canvas-breadcrumb"><span className="canvas-live-dot" />キャンバス <span>/</span> フロー設計</div><div className="canvas-tools"><span className="canvas-shortcut">⌘ ↵ 実行</span><button className="canvas-tool" title="表示設定"><Settings2 size={15} /></button><span className="canvas-zoom">100%</span></div></div>
-          <div className="canvas-area">
-            <div className="canvas-stamp">CUSTOMER SUCCESS <span>·</span> FLOW 01</div>
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              nodeTypes={nodeTypes}
-              onNodesChange={(changes) => { onNodesChange(changes); if (changes.some((change) => change.type === 'remove' || change.type === 'position')) setSaved(false) }}
-              onEdgesChange={(changes) => { onEdgesChange(changes); setSaved(false) }}
-              onConnect={onConnect}
-              onNodeClick={(_event, node) => setSelectedId(node.id)}
-              onPaneClick={() => setSelectedId('')}
-              fitView
-              fitViewOptions={{ padding: 0.34 }}
-              minZoom={0.35}
-              maxZoom={1.5}
-            >
-              <Background color="#d6d8ce" gap={22} size={1} />
-              <Controls showInteractive={false} position="bottom-left" />
-            </ReactFlow>
-            <div className="canvas-caption"><span>顧客オンボーディング</span><span>最終更新: たった今</span></div>
+        <section className="builder" aria-label="ワークフロー編集">
+          <div className="linear-toolbar"><div><Workflow size={15} /><span>実行フロー</span><small>{nodes.length} ブロック</small></div><p>上から順に実行されます。ブロックを選択して設定します。</p></div>
+          <div className="linear-canvas">
+            <div className="linear-canvas__inner">
+              {nodes.find((node) => node.type === 'trigger') ? <WorkflowStack nodeId={nodes.find((node) => node.type === 'trigger')!.id} nodes={nodes} edges={edges} selectedId={selectedId} onSelect={setSelectedId} /> : <p className="linear-empty">開始ブロックがありません</p>}
+              {orphanRoots.length > 0 && <section className="linear-orphans"><h2>未接続ブロック</h2><p>開始ブロックから続くフローに接続されていません。</p>{orphanRoots.map((node) => <WorkflowStack key={node.id} nodeId={node.id} nodes={nodes} edges={edges} selectedId={selectedId} onSelect={setSelectedId} />)}</section>}
+            </div>
           </div>
         </section>
 
@@ -269,16 +316,32 @@ function WorkflowEditor() {
               {selectedNode.type === 'webhook' && <><label className="field-label">HTTPメソッド<select className="text-input select-input" value={selectedNode.data.method ?? 'POST'} onChange={(event) => updateData({ method: event.target.value as 'GET' | 'POST' })}><option>POST</option><option>GET</option></select></label><label className="field-label">送信先URL<input className="text-input" type="url" placeholder="https://api.example.com/hooks" value={selectedNode.data.url ?? ''} onChange={(event) => updateData({ url: event.target.value })} /><small className="field-help">POSTの場合、workflowIdをJSONで送信します</small></label></>}
               {selectedNode.type === 'page' && <label className="field-label">表示URL<input className="text-input" type="url" placeholder="https://example.com/guide" value={selectedNode.data.url ?? ''} onChange={(event) => updateData({ url: event.target.value })} /><small className="field-help">ローカルテスト: <a href={`${window.location.origin}/demo-pages/welcome.html`} target="_blank" rel="noreferrer">案内ページ</a> · <a href={`${window.location.origin}/demo-pages/review.html`} target="_blank" rel="noreferrer">内容確認ページ</a></small><small className="field-help">実行画面内に表示します。外部サイトはiframe表示を許可している必要があります</small></label>}
               {selectedNode.type === 'condition' && <>
+                {(() => {
+                  const previousNodes = getPreviousNodes(selectedNode.id, nodes, edges)
+                  return <>
                 <label className="field-label">比較する入力<select className="text-input select-input" value={selectedNode.data.conditionField ?? 'inputA'} onChange={(event) => updateData({ conditionField: event.target.value as 'inputA' | 'inputB', conditionOperator: event.target.value === 'inputA' ? 'equals' : 'greater_than', conditionValue: '' })}><option value="inputA">入力A（文字列）</option><option value="inputB">入力B（数字）</option></select></label>
                 <label className="field-label">条件<select className="text-input select-input" value={selectedNode.data.conditionOperator ?? 'equals'} onChange={(event) => updateData({ conditionOperator: event.target.value })}>{(selectedNode.data.conditionField === 'inputB' ? [['equals', '等しい'], ['not_equals', '等しくない'], ['greater_than', 'より大きい'], ['greater_or_equal', '以上'], ['less_than', 'より小さい'], ['less_or_equal', '以下']] : [['equals', '等しい'], ['not_equals', '等しくない'], ['contains', '含む']]).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
                 <label className="field-label">比較する値<input className="text-input" type="text" inputMode={selectedNode.data.conditionField === 'inputB' ? 'numeric' : 'text'} pattern={selectedNode.data.conditionField === 'inputB' ? '[0-9]*' : undefined} value={selectedNode.data.conditionValue ?? ''} onChange={(event) => updateData({ conditionValue: selectedNode.data.conditionField === 'inputB' ? event.target.value.replace(/[^0-9]/g, '') : event.target.value })} /></label>
                 <div className="condition-branches">
-                  {(['ok', 'ng'] as const).map((branch) => <label className="field-label" key={branch}>{branch === 'ok' ? '条件がOKの場合' : '条件がNGの場合'}<select className="text-input select-input" value={edges.find((edge) => edge.source === selectedNode.id && edge.sourceHandle === branch)?.target ?? ''} onChange={(event) => setBranchTarget(branch, event.target.value)}><option value="">ノードを選択</option>{nodes.filter((node) => node.id !== selectedNode.id && node.type !== 'trigger').map((node) => { const unavailable = edges.some((edge) => edge.target === node.id && !(edge.source === selectedNode.id && edge.sourceHandle === branch)); return <option key={node.id} value={node.id} disabled={unavailable}>{node.data.label}</option> })}</select></label>)}
+                  {(['ok', 'ng'] as const).map((branch) => {
+                    const currentEdge = edges.find((edge) => edge.source === selectedNode.id && (edge.sourceHandle === branch || (branch === 'ng' && edge.sourceHandle === 'ng-return')))
+                    const value = currentEdge?.sourceHandle === 'ng-return' ? `return:${currentEdge.target}` : currentEdge?.target ?? ''
+                    return <label className="field-label" key={branch}>{branch === 'ok' ? '条件がOKの場合' : '条件がNGの場合'}<select className="text-input select-input" value={value} onChange={(event) => setBranchTarget(branch, event.target.value)}><option value="">ノードを選択</option>{nodes.filter((node) => node.id !== selectedNode.id && node.type !== 'trigger').map((node) => { const unavailable = edges.some((edge) => edge.target === node.id && !returnHandles.has(edge.sourceHandle ?? '') && !(edge.source === selectedNode.id && edge.sourceHandle === branch)); return <option key={node.id} value={node.id} disabled={unavailable}>{node.data.label}</option> })}{branch === 'ng' && <optgroup label="前の工程へ戻る">{previousNodes.map((node) => <option key={node.id} value={`return:${node.id}`}>{node.data.label}へ戻る</option>)}</optgroup>}</select></label>
+                  })}
                 </div>
-                <small className="field-help">先行する入力ノードの値を判定します。OK/NGの接続先を両方選択してください。</small>
+                <small className="field-help">先行する入力ノードの値を判定します。NG時は前工程へ戻すこともできます。</small>
+                  </>
+                })()}
               </>}
               {selectedNode.type === 'input' && <div className="trigger-note"><FileText size={15} /><span>実行画面で入力A（文字列）と入力B（数字）を受け付け、後続ノードへ引き継ぎます。</span></div>}
-              {selectedNode.type === 'approval' && <div className="trigger-note"><CheckCircle2 size={15} /><span>実行画面で「はい」を選ぶと次へ進み、「いいえ」を選ぶと拒否されました画面で終了します。</span></div>}
+              {selectedNode.type === 'approval' && <>
+                <div className="trigger-note"><CheckCircle2 size={15} /><span>実行画面で「はい」を選ぶと次へ進みます。「いいえ」は前工程へ戻すか、拒否終了を選べます。</span></div>
+                {(() => {
+                  const previousNodes = getPreviousNodes(selectedNode.id, nodes, edges)
+                  const returnTargetId = edges.find((edge) => edge.source === selectedNode.id && edge.sourceHandle === 'no-return')?.target ?? ''
+                  return <label className="field-label approval-return-field">「いいえ」の場合<select className="text-input select-input" value={returnTargetId} onChange={(event) => setApprovalReturnTarget(event.target.value)}><option value="">拒否して終了</option>{previousNodes.map((node) => <option key={node.id} value={node.id}>{node.data.label}へ戻る</option>)}</select></label>
+                })()}
+              </>}
               {selectedNode.type === 'trigger' && <div className="trigger-note"><Zap size={15} /><span>このフローは手動実行で開始します。テスト実行から起動できます。</span></div>}
               <div className="inspector-divider" />
               <button className="delete-node" disabled={selectedNode.type === 'trigger'} onClick={() => { setNodes((current) => current.filter((node) => node.id !== selectedNode.id)); setEdges((current) => current.filter((edge) => edge.source !== selectedNode.id && edge.target !== selectedNode.id)); setSelectedId(''); setSaved(false) }}>ノードを削除</button>
@@ -303,7 +366,7 @@ function App() {
   const executionId = window.location.pathname.startsWith(executionPrefix)
     ? decodeURIComponent(window.location.pathname.slice(executionPrefix.length))
     : ''
-  return executionId ? <ExecutionView executionId={executionId} /> : <ReactFlowProvider><WorkflowEditor /></ReactFlowProvider>
+  return executionId ? <ExecutionView executionId={executionId} /> : <WorkflowEditor />
 }
 
 export default App
