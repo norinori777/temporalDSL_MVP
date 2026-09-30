@@ -1,7 +1,15 @@
 import cors from 'cors'
 import express from 'express'
 import { Client, Connection } from '@temporalio/client'
-import { compileWorkflow, workflowSchema, type WorkflowDefinition } from './dsl.js'
+import { z } from 'zod'
+import {
+  APPROVAL_SIGNAL,
+  EXECUTION_STATE_QUERY,
+  PAGE_CONTINUE_SIGNAL,
+  compileWorkflow,
+  workflowSchema,
+  type WorkflowDefinition,
+} from './dsl.js'
 
 const app = express()
 const port = Number(process.env.PORT ?? 4000)
@@ -69,6 +77,49 @@ app.post('/api/workflows/:id/run', async (request, response) => {
     response.status(202).json({ workflowId: handle.workflowId, runId: handle.firstExecutionRunId })
   } catch (error) {
     response.status(503).json({ error: `Temporalに接続できません: ${error instanceof Error ? error.message : '接続エラー'}` })
+  }
+})
+
+app.get('/api/executions/:workflowId', async (request, response) => {
+  try {
+    const client = await getTemporalClient()
+    const handle = client.workflow.getHandle(request.params.workflowId)
+    const state = await handle.query(EXECUTION_STATE_QUERY)
+    response.json(state)
+  } catch (error) {
+    response.status(404).json({ error: `実行状態を取得できません: ${error instanceof Error ? error.message : '実行が見つかりません'}` })
+  }
+})
+
+app.post('/api/executions/:workflowId/approval', async (request, response) => {
+  const parsed = z.object({ decision: z.enum(['yes', 'no']) }).safeParse(request.body)
+  if (!parsed.success) return response.status(400).json({ error: '承認結果はyesまたはnoを指定してください' })
+  try {
+    const client = await getTemporalClient()
+    const handle = client.workflow.getHandle(request.params.workflowId)
+    const state = await handle.query<{ status: string }>(EXECUTION_STATE_QUERY)
+    if (state.status !== 'waiting_approval') {
+      return response.status(409).json({ error: 'この実行は承認待ちではありません' })
+    }
+    await handle.signal(APPROVAL_SIGNAL, parsed.data.decision)
+    response.status(202).json({ accepted: true })
+  } catch (error) {
+    response.status(404).json({ error: `承認結果を送信できません: ${error instanceof Error ? error.message : '実行が見つかりません'}` })
+  }
+})
+
+app.post('/api/executions/:workflowId/continue', async (request, response) => {
+  try {
+    const client = await getTemporalClient()
+    const handle = client.workflow.getHandle(request.params.workflowId)
+    const state = await handle.query<{ status: string }>(EXECUTION_STATE_QUERY)
+    if (state.status !== 'waiting_page') {
+      return response.status(409).json({ error: 'この実行は画面確認待ちではありません' })
+    }
+    await handle.signal(PAGE_CONTINUE_SIGNAL)
+    response.status(202).json({ accepted: true })
+  } catch (error) {
+    response.status(404).json({ error: `次のノードへ進めません: ${error instanceof Error ? error.message : '実行が見つかりません'}` })
   }
 })
 

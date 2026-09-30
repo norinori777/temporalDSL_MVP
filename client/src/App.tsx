@@ -14,11 +14,13 @@ import {
   type Node,
   type NodeProps,
 } from '@xyflow/react'
-import { Activity, ArrowDown, Check, ChevronDown, CircleHelp, Clock3, Cloud, Plus, Play, Radio, Save, Settings2, Webhook, Workflow, Zap } from 'lucide-react'
+import { Activity, ArrowDown, Check, CheckCircle2, ChevronDown, CircleHelp, Clock3, Cloud, MonitorPlay, Plus, Play, Radio, Save, Settings2, Webhook, Workflow, Zap } from 'lucide-react'
 import '@xyflow/react/dist/style.css'
 import './App.css'
+import DemoPage from './DemoPages.js'
+import ExecutionView from './ExecutionView.js'
 
-type NodeKind = 'trigger' | 'delay' | 'webhook'
+type NodeKind = 'trigger' | 'delay' | 'webhook' | 'approval' | 'page'
 type StepData = { label: string; seconds?: number; url?: string; method?: 'GET' | 'POST' }
 type FlowNode = Node<StepData, NodeKind>
 
@@ -36,15 +38,20 @@ function FlowStep({ data, type, selected }: NodeProps<FlowNode>) {
     ? 'イベントで開始'
     : type === 'delay'
       ? `${data.seconds ?? 1} 秒待機`
-      : `${data.method ?? 'POST'} · ${data.url || 'URLを設定'}`
-  const icon = type === 'trigger' ? <Zap size={16} /> : type === 'delay' ? <Clock3 size={16} /> : <Webhook size={16} />
+      : type === 'webhook'
+        ? `${data.method ?? 'POST'} · ${data.url || 'URLを設定'}`
+        : type === 'page'
+          ? data.url || '表示URLを設定'
+          : 'はいで次へ · いいえで終了'
+  const icon = type === 'trigger' ? <Zap size={16} /> : type === 'delay' ? <Clock3 size={16} /> : type === 'webhook' ? <Webhook size={16} /> : type === 'page' ? <MonitorPlay size={16} /> : <CheckCircle2 size={16} />
+  const kind = type === 'trigger' ? 'トリガー' : type === 'delay' ? 'タイマー' : type === 'webhook' ? 'Webhook送信' : type === 'page' ? '画面表示' : '承認'
 
   return (
     <div className={`flow-node flow-node--${type}${selected ? ' is-selected' : ''}`}>
       {type !== 'trigger' && <Handle type="target" position={Position.Top} />}
       <div className="flow-node__icon">{icon}</div>
       <div className="flow-node__copy">
-        <span className="flow-node__kind">{type === 'trigger' ? 'トリガー' : type === 'delay' ? 'タイマー' : 'Webhook'}</span>
+        <span className="flow-node__kind">{kind}</span>
         <strong>{data.label}</strong>
         <small>{details}</small>
       </div>
@@ -54,7 +61,7 @@ function FlowStep({ data, type, selected }: NodeProps<FlowNode>) {
   )
 }
 
-const nodeTypes = { trigger: FlowStep, delay: FlowStep, webhook: FlowStep }
+const nodeTypes = { trigger: FlowStep, delay: FlowStep, webhook: FlowStep, approval: FlowStep, page: FlowStep }
 
 function WorkflowEditor() {
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>(starterNodes)
@@ -105,7 +112,11 @@ function WorkflowEditor() {
     const id = `${type}-${crypto.randomUUID().slice(0, 6)}`
     const data: StepData = type === 'delay'
       ? { label: '一定時間待機', seconds: 5 }
-      : { label: 'Webhookを送信', method: 'POST', url: '' }
+      : type === 'webhook'
+        ? { label: 'Webhookを送信', method: 'POST', url: '' }
+        : type === 'page'
+          ? { label: '案内ページを表示', url: new URL('/demo-pages/welcome.html', window.location.origin).toString() }
+          : { label: '内容を承認', }
     setNodes((current) => [...current, { id, type, position: { x: 340, y: 248 + current.length * 150 }, data }])
     if (previous) setEdges((current) => [...current, { id: `${previous.id}-${id}`, source: previous.id, target: id, animated: true }])
     setSelectedId(id)
@@ -152,7 +163,7 @@ function WorkflowEditor() {
       const response = await fetch(`${API_URL}/api/workflows/${workflowId}/run`, { method: 'POST' })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error ?? '実行を開始できませんでした')
-      setMessage(`Temporalで実行中 · ${result.workflowId}`)
+      window.location.assign(`/executions/${encodeURIComponent(result.workflowId)}`)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '実行を開始できませんでした')
     } finally {
@@ -184,7 +195,7 @@ function WorkflowEditor() {
       <section className="workspace">
         <aside className="left-rail">
           <div className="rail-section"><span className="rail-label">自動化</span><button className="rail-link is-active"><Workflow size={16} />ワークフロー</button><button className="rail-link"><Activity size={16} />実行履歴 <span className="rail-count">0</span></button></div>
-          <div className="rail-section flow-library"><div className="library-heading"><span className="rail-label">ノードライブラリ</span><button className="tiny-icon" title="ノードを検索"><Plus size={15} /></button></div><p className="library-hint">キャンバスに追加</p><button className="library-item" onClick={() => addStep('delay')}><span className="library-icon library-icon--timer"><Clock3 size={16} /></span><span><strong>待機</strong><small>指定時間だけ停止</small></span><Plus size={14} /></button><button className="library-item" onClick={() => addStep('webhook')}><span className="library-icon library-icon--webhook"><Webhook size={16} /></span><span><strong>Webhook</strong><small>HTTPリクエスト送信</small></span><Plus size={14} /></button></div>
+          <div className="rail-section flow-library"><div className="library-heading"><span className="rail-label">ノードライブラリ</span><button className="tiny-icon" title="ノードを検索"><Plus size={15} /></button></div><p className="library-hint">キャンバスに追加</p><button className="library-item" onClick={() => addStep('delay')}><span className="library-icon library-icon--timer"><Clock3 size={16} /></span><span><strong>待機</strong><small>指定時間だけ停止</small></span><Plus size={14} /></button><button className="library-item" onClick={() => addStep('approval')}><span className="library-icon library-icon--approval"><CheckCircle2 size={16} /></span><span><strong>承認</strong><small>はい・いいえを確認</small></span><Plus size={14} /></button><button className="library-item" onClick={() => addStep('page')}><span className="library-icon library-icon--page"><MonitorPlay size={16} /></span><span><strong>画面表示</strong><small>URLを表示して確認</small></span><Plus size={14} /></button><button className="library-item" onClick={() => addStep('webhook')}><span className="library-icon library-icon--webhook"><Webhook size={16} /></span><span><strong>Webhook</strong><small>HTTPリクエスト送信</small></span><Plus size={14} /></button></div>
           <div className="rail-footer"><div className="usage-label"><span>月間実行数</span><span>0 / 1,000</span></div><div className="usage-track"><span /></div><button className="rail-link"><CircleHelp size={15} />ヘルプとガイド</button></div>
         </aside>
 
@@ -217,10 +228,12 @@ function WorkflowEditor() {
           <div className="inspector-heading"><div><span className="rail-label">設定</span><h2>{selectedNode ? 'ノード設定' : 'フロー設定'}</h2></div><button className="icon-button subtle" title="設定メニュー"><Settings2 size={16} /></button></div>
           {selectedNode ? (
             <div className="inspector-content">
-              <div className="selected-node"><span className={`selected-node__icon selected-node__icon--${selectedNode.type}`}>{selectedNode.type === 'trigger' ? <Zap size={16} /> : selectedNode.type === 'delay' ? <Clock3 size={16} /> : <Webhook size={16} />}</span><div><small>{selectedNode.type === 'trigger' ? 'トリガー' : selectedNode.type === 'delay' ? 'タイマー' : 'Webhook'}</small><strong>{selectedNode.data.label}</strong></div></div>
+              <div className="selected-node"><span className={`selected-node__icon selected-node__icon--${selectedNode.type}`}>{selectedNode.type === 'trigger' ? <Zap size={16} /> : selectedNode.type === 'delay' ? <Clock3 size={16} /> : selectedNode.type === 'webhook' ? <Webhook size={16} /> : selectedNode.type === 'page' ? <MonitorPlay size={16} /> : <CheckCircle2 size={16} />}</span><div><small>{selectedNode.type === 'trigger' ? 'トリガー' : selectedNode.type === 'delay' ? 'タイマー' : selectedNode.type === 'webhook' ? 'Webhook送信' : selectedNode.type === 'page' ? '画面表示' : '承認'}</small><strong>{selectedNode.data.label}</strong></div></div>
               <label className="field-label">ノード名<input className="text-input" value={selectedNode.data.label} onChange={(event) => updateData({ label: event.target.value })} /></label>
               {selectedNode.type === 'delay' && <label className="field-label">待機時間 <span className="input-suffix"><input className="text-input" type="number" min="1" max="86400" value={selectedNode.data.seconds ?? 1} onChange={(event) => updateData({ seconds: Number(event.target.value) })} /><span>秒</span></span><small className="field-help">1秒から24時間まで設定できます</small></label>}
               {selectedNode.type === 'webhook' && <><label className="field-label">HTTPメソッド<select className="text-input select-input" value={selectedNode.data.method ?? 'POST'} onChange={(event) => updateData({ method: event.target.value as 'GET' | 'POST' })}><option>POST</option><option>GET</option></select></label><label className="field-label">送信先URL<input className="text-input" type="url" placeholder="https://api.example.com/hooks" value={selectedNode.data.url ?? ''} onChange={(event) => updateData({ url: event.target.value })} /><small className="field-help">POSTの場合、workflowIdをJSONで送信します</small></label></>}
+              {selectedNode.type === 'page' && <label className="field-label">表示URL<input className="text-input" type="url" placeholder="https://example.com/guide" value={selectedNode.data.url ?? ''} onChange={(event) => updateData({ url: event.target.value })} /><small className="field-help">ローカルテスト: <a href={`${window.location.origin}/demo-pages/welcome.html`} target="_blank" rel="noreferrer">案内ページ</a> · <a href={`${window.location.origin}/demo-pages/review.html`} target="_blank" rel="noreferrer">内容確認ページ</a></small><small className="field-help">実行画面内に表示します。外部サイトはiframe表示を許可している必要があります</small></label>}
+              {selectedNode.type === 'approval' && <div className="trigger-note"><CheckCircle2 size={15} /><span>実行画面で「はい」を選ぶと次へ進み、「いいえ」を選ぶと拒否されました画面で終了します。</span></div>}
               {selectedNode.type === 'trigger' && <div className="trigger-note"><Zap size={15} /><span>このフローは手動実行で開始します。テスト実行から起動できます。</span></div>}
               <div className="inspector-divider" />
               <button className="delete-node" disabled={selectedNode.type === 'trigger'} onClick={() => { setNodes((current) => current.filter((node) => node.id !== selectedNode.id)); setEdges((current) => current.filter((edge) => edge.source !== selectedNode.id && edge.target !== selectedNode.id)); setSelectedId(''); setSaved(false) }}>ノードを削除</button>
@@ -237,7 +250,15 @@ function WorkflowEditor() {
 }
 
 function App() {
-  return <ReactFlowProvider><WorkflowEditor /></ReactFlowProvider>
+  const pathParts = window.location.pathname.split('/').filter(Boolean)
+  if (pathParts[0] === 'demo-pages' && (pathParts[1] === 'welcome' || pathParts[1] === 'review')) {
+    return <DemoPage slug={pathParts[1]} />
+  }
+  const executionPrefix = '/executions/'
+  const executionId = window.location.pathname.startsWith(executionPrefix)
+    ? decodeURIComponent(window.location.pathname.slice(executionPrefix.length))
+    : ''
+  return executionId ? <ExecutionView executionId={executionId} /> : <ReactFlowProvider><WorkflowEditor /></ReactFlowProvider>
 }
 
 export default App

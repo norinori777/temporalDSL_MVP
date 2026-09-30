@@ -12,7 +12,7 @@ export const workflowSchema = z.object({
   name: z.string().min(1).max(80),
   nodes: z.array(z.object({
     id: z.string().min(1),
-    type: z.enum(['trigger', 'delay', 'webhook']),
+    type: z.enum(['trigger', 'delay', 'webhook', 'approval', 'page']),
     position: z.object({ x: z.number(), y: z.number() }),
     data: nodeDataSchema,
   })).min(1),
@@ -27,12 +27,25 @@ export const workflowSchema = z.object({
 export type WorkflowDefinition = z.infer<typeof workflowSchema>
 export type WorkflowStep = {
   id: string
-  type: 'delay' | 'webhook'
+  type: 'delay' | 'webhook' | 'approval' | 'page'
   label: string
   seconds?: number
   url?: string
   method?: 'GET' | 'POST'
 }
+
+export type WorkflowExecutionState = {
+  status: 'running' | 'waiting_delay' | 'waiting_approval' | 'waiting_page' | 'rejected' | 'completed'
+  currentStepId?: string
+  currentStepLabel?: string
+  currentUrl?: string
+  waitUntil?: number
+  message?: string
+}
+
+export const EXECUTION_STATE_QUERY = 'executionState'
+export const APPROVAL_SIGNAL = 'approvalDecision'
+export const PAGE_CONTINUE_SIGNAL = 'continuePage'
 
 export function compileWorkflow(definition: WorkflowDefinition): WorkflowStep[] {
   const { nodes, edges } = definition
@@ -68,6 +81,9 @@ export function compileWorkflow(definition: WorkflowDefinition): WorkflowStep[] 
       }
       if (current.type === 'webhook' && !current.data.url) {
         throw new Error(`「${current.data.label}」のURLを設定してください`)
+      }
+      if (current.type === 'page' && !current.data.url) {
+        throw new Error(`「${current.data.label}」の表示URLを設定してください`)
       }
       ordered.push({ id: current.id, type: current.type, ...current.data })
     }

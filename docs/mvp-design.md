@@ -6,10 +6,12 @@
 
 ## MVPの範囲
 
-- ノード: 手動開始、待機、Webhook送信（GET/POST）
+- ノード: 手動開始、待機、Webhook送信（GET/POST）、承認、URL画面表示
 - UI: ノード追加、接続、属性変更、保存、テスト実行
 - DSL: ノードとエッジをJSONで表現し、APIで検証後に直列ステップへコンパイル
-- 実行: Temporal Workflowが待機を管理し、Webhookは再試行付きActivityで送信
+- 実行: Temporal Workflowが待機を管理し、Webhookは再試行付きActivityで送信。承認と画面確認はSignalを受け取るまでWorkflowを待機
+- 利用者画面: `/executions/:workflowId`で実行状態を表示。承認ノードは「はい」で続行、「いいえ」で拒否終了。画面表示ノードはURLをiframe表示し、「次へ」で続行
+- ローカル表示テストページ: `/demo-pages/welcome.html`、`/demo-pages/review.html`。JavaScriptを使わない静的HTMLのため、sandbox付きiframeで表示を試せる
 - 保存: APIプロセス内メモリ。再起動で消えるため本番利用不可
 - 接続: 分岐、並列実行、条件、認証情報、複数テナント、実行履歴UIは対象外
 
@@ -23,6 +25,14 @@ React Flow UI
 ```
 
 APIとWorkerは同じ`TEMPORAL_TASK_QUEUE`を使う。Workflowコード内では副作用を実行せず、HTTP通信をActivityに分離する。待機はTemporal timerを使うため、Worker再起動をまたいで継続できる。
+
+実行画面は次のAPIをポーリングして状態を更新する。
+
+- `GET /api/executions/:workflowId`: Queryで現在の実行状態を取得
+- `POST /api/executions/:workflowId/approval`: `{ "decision": "yes" | "no" }`をSignalとして送信
+- `POST /api/executions/:workflowId/continue`: 画面確認完了をSignalとして送信
+
+URL画面表示は外部サイトの埋め込み設定（CSPや`X-Frame-Options`）によって表示できない場合がある。その場合、実行画面から別タブで開ける。APIは現状認証なしの開発用であり、本番利用前に実行閲覧・承認権限の認証認可が必要。
 
 ## 起動
 
