@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowLeft, CheckCircle2, CircleX, Clock3, ExternalLink, FileText, LoaderCircle, MonitorPlay, Send } from 'lucide-react'
 
 type ExecutionState = {
-  status: 'running' | 'waiting_delay' | 'waiting_approval' | 'waiting_page' | 'waiting_input' | 'rejected' | 'completed'
+  status: 'running' | 'waiting_delay' | 'waiting_approval' | 'waiting_page' | 'waiting_input' | 'rejected' | 'loop_limit_reached' | 'completed'
   currentStepId?: string
   currentStepLabel?: string
   currentUrl?: string
@@ -94,7 +94,7 @@ function ExecutionView({ executionId }: { executionId: string }) {
   }
 
   const remainingSeconds = state?.waitUntil ? Math.max(0, Math.ceil((state.waitUntil - now) / 1000)) : 0
-  const isTerminal = state?.status === 'completed' || state?.status === 'rejected'
+  const isTerminal = state?.status === 'completed' || state?.status === 'rejected' || state?.status === 'loop_limit_reached'
   const sendValuesToPage = () => {
     if (!state?.inputValues) return
     pageFrameRef.current?.contentWindow?.postMessage({ type: 'workflow-input-values', values: state.inputValues }, '*')
@@ -154,6 +154,12 @@ function ExecutionView({ executionId }: { executionId: string }) {
             <span className="execution-state-icon"><CircleX size={23} /></span>
             <h2>{state.message ?? '拒否されました'}</h2>
             <p>このワークフローはここで終了しました。</p>
+          </div>
+        ) : state.status === 'loop_limit_reached' ? (
+          <div className="execution-state-panel execution-state-panel--loop-limit">
+            <span className="execution-state-icon"><CircleX size={23} /></span>
+            <h2>戻り回数の上限に達しました</h2>
+            <p>{state.message ?? '設定された戻り回数を超えたため、実行を終了しました。'}</p>
           </div>
         ) : state.status === 'completed' ? (
           <div className="execution-state-panel execution-state-panel--complete">

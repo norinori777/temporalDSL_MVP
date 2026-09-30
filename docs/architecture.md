@@ -95,10 +95,10 @@ APIとWorkerは同じTask Queueを使う。既定値は`workflow-studio`。Tempo
 | --- | --- | --- |
 | `trigger` | `label` | 手動開始点。実行ステップ配列には含めない |
 | `input` | `label` | `inputA`（空でない文字列）と`inputB`（ASCII数字列）をSignalで受け取る |
-| `condition` | `conditionField`, `conditionOperator`, `conditionValue` | 直近の入力値を比較して接続先を選ぶ |
+| `condition` | `conditionField`, `conditionOperator`, `conditionValue`, `maxReturnCount`（戻り時、1〜100、既定3） | 直近の入力値を比較して接続先を選ぶ |
 | `delay` | `seconds`（1〜86400） | Temporal Timerで待機する |
 | `webhook` | `url`, `method` | ActivityでHTTP GETまたはPOSTを送信する |
-| `approval` | `label` | 「はい」で通常接続へ進み、「いいえ」は戻りまたは拒否終了 |
+| `approval` | `label`, `maxReturnCount`（戻り時、1〜100、既定3） | 「はい」で通常接続へ進み、「いいえ」は戻りまたは拒否終了 |
 | `page` | `url` | 実行画面でURLをiframe表示し、続行Signalまで待つ |
 
 条件演算子は入力フィールドで制限する。入力Aでは`equals`、`not_equals`、`contains`を使う。文字列比較は完全一致または大文字小文字を区別した部分一致。入力Bでは`equals`、`not_equals`、`greater_than`、`greater_or_equal`、`less_than`、`less_or_equal`を使い、比較時に数値化する。入力値と比較値は文字列として保持するため、入力Bの先頭ゼロは表示・受け渡し時に失われない。
@@ -148,8 +148,8 @@ APIとWorkerは同じTask Queueを使う。既定値は`workflow-studio`。Tempo
 | `startStepId` | 開始後に最初に実行する工程ID |
 | `nextById` | 通常接続元IDから次工程IDへの対応 |
 | `branchesById` | 条件ノードIDからOK/通常NG先への対応 |
-| `conditionNgReturnsById` | 条件ノードIDからNG時の戻り先への対応 |
-| `approvalNoReturnsById` | 承認ノードIDから「いいえ」の戻り先への対応 |
+| `conditionNgReturnsById` | 条件ノードIDからNG時の戻り先と戻り上限への対応 |
+| `approvalNoReturnsById` | 承認ノードIDから「いいえ」の戻り先と戻り上限への対応 |
 
 `steps`配列の並び自体は実行順を定義しない。Workflowは`currentStepId`と上記マップを使って次のノードを選ぶ。これにより、UIの表示順と実行制御を分離している。
 
@@ -202,7 +202,7 @@ sequenceDiagram
 - 待機は`@temporalio/workflow`の`sleep()`を使う。Workerが再起動してもTimerはTemporal履歴から再開される。
 - Workflowが外部HTTPを必要とする場合だけ`sendWebhook` Activityを呼び出す。
 
-Workflowは戻り先からその後の工程も再実行する。戻り条件が変化しないグラフでは反復が継続するため、実行者は再入力などの終了条件を構成する。Webhookを含む工程へ戻ると、Webhookも再送されるため送信先側の冪等性を考慮する。
+戻り上限は戻り元ノードごと・Workflow実行ごとに数える。既定値は3回で、1〜100回の範囲で設定できる。設定回数の戻り遷移を許可した後、次の戻り要求で`loop_limit_reached`となり、実行画面に理由を表示して終了する。Workflowは戻り先からその後の工程も再実行するため、Webhookを含む工程へ戻る場合は送信先側の冪等性を考慮する。
 
 ### 5.2 Signal・Queryと状態
 
@@ -215,7 +215,7 @@ Workflowは`executionState` Queryと3種類のSignalを登録する。
 | `continuePage` | 画面確認後の続行 | `waiting_page`のみ受理 |
 | `executionState` | 現在状態のQuery | 実行画面が約1秒間隔で取得 |
 
-`WorkflowExecutionState.status`は`running`、`waiting_delay`、`waiting_input`、`waiting_approval`、`waiting_page`、`rejected`、`completed`。待機中は`currentStepId`と`currentStepLabel`を含める。入力値を受け取った後は後続状態にも`inputValues`を含め、再入力待ちでは前回値を含めない。
+`WorkflowExecutionState.status`は`running`、`waiting_delay`、`waiting_input`、`waiting_approval`、`waiting_page`、`rejected`、`loop_limit_reached`、`completed`。待機中は`currentStepId`と`currentStepLabel`を含める。入力値を受け取った後は後続状態にも`inputValues`を含め、再入力待ちでは前回値を含めない。
 
 ### 5.3 ActivityとWebhook
 
@@ -293,7 +293,7 @@ yarn lint
 
 - 定義ストアはインメモリで、API再起動で消える。
 - APIに認証・認可がない。複数ユーザーや本番利用にはそのまま使わない。
-- Workflowの戻り接続に反復回数上限はない。必要に応じて回数制限やタイムアウトを追加する。
+- 戻り接続は戻り元ノードごとに最大100回まで設定できる。上限超過時は`loop_limit_reached`でWorkflowを終了する。
 - Webhook URLのSSRF対策、秘密情報保管、送信先別認証、監査ログ、レート制限は未実装。
 - 条件分岐の結果経路の合流と並列実行は未対応。
 - 入力値やWorkflow引数はTemporal履歴に含まれる可能性があるため、機密情報の取り扱いに注意する。
