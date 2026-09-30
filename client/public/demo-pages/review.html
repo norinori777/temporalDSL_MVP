@@ -25,6 +25,10 @@
       .note { margin-top: 18px; padding: 13px 14px; background: #f0e9e2; }
       .note strong { color: #895840; font-size: 10px; }
       .note p { margin: 6px 0 0; color: #776e66; font-size: 10px; line-height: 1.8; }
+      .received-values { margin-top: 18px; padding: 13px 14px; border: 1px solid #e8dcd1; background: #fff; }
+      .received-values h2 { margin: 0 0 8px; color: #895840; font-size: 10px; }
+      .received-values p { display: flex; gap: 10px; margin: 5px 0 0; color: #71665d; font-size: 10px; }
+      .received-values strong { overflow-wrap: anywhere; color: #40372f; font-weight: 500; }
       footer { margin-top: 24px; color: #9a928a; font: 8px Consolas, monospace; }
       @media (max-width: 520px) { header { height: 52px; padding-inline: 15px; } main { padding-top: 29px; } h1 { font-size: 24px; } }
     </style>
@@ -42,7 +46,22 @@
         <div><span>利用開始日</span><strong>2026年10月15日</strong></div>
       </div>
       <aside class="note"><strong>確認事項</strong><p>内容に相違がある場合は、担当窓口までご連絡ください。確認後、次の手続きへ進みます。</p></aside>
+      <section class="received-values" id="received-values" hidden>
+        <h2>ワークフローから受け取った値</h2>
+        <p>入力A <strong id="input-a-value"></strong></p>
+        <p>入力B <strong id="input-b-value"></strong></p>
+      </section>
       <footer>FIELDNOTE · ACCOUNT OPERATIONS</footer>
     </main>
+    <script>
+      window.addEventListener('message', (event) => {
+        const message = event.data;
+        if (event.source !== window.parent || message?.type !== 'workflow-input-values') return;
+        if (typeof message.values?.inputA !== 'string' || typeof message.values?.inputB !== 'string') return;
+        document.getElementById('input-a-value').textContent = message.values.inputA;
+        document.getElementById('input-b-value').textContent = message.values.inputB;
+        document.getElementById('received-values').hidden = false;
+      });
+    </script>
   </body>
 </html>
