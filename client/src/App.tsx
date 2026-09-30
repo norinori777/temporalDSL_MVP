@@ -5,7 +5,7 @@ import DemoPage from './DemoPages.js'
 import ExecutionView from './ExecutionView.js'
 
 type NodeKind = 'trigger' | 'delay' | 'webhook' | 'approval' | 'page' | 'input' | 'condition'
-type StepData = { label: string; seconds?: number; url?: string; method?: 'GET' | 'POST'; conditionField?: 'inputA' | 'inputB'; conditionOperator?: string; conditionValue?: string }
+type StepData = { label: string; seconds?: number; url?: string; method?: 'GET' | 'POST'; maxReturnCount?: number; conditionField?: 'inputA' | 'inputB'; conditionOperator?: string; conditionValue?: string }
 type FlowNode = { id: string; type: NodeKind; position: { x: number; y: number }; data: StepData }
 type FlowEdge = { id: string; source: string; target: string; sourceHandle?: string }
 const returnHandles = new Set(['ng-return', 'no-return'])
@@ -329,6 +329,7 @@ function WorkflowEditor() {
                     return <label className="field-label" key={branch}>{branch === 'ok' ? '条件がOKの場合' : '条件がNGの場合'}<select className="text-input select-input" value={value} onChange={(event) => setBranchTarget(branch, event.target.value)}><option value="">ノードを選択</option>{nodes.filter((node) => node.id !== selectedNode.id && node.type !== 'trigger').map((node) => { const unavailable = edges.some((edge) => edge.target === node.id && !returnHandles.has(edge.sourceHandle ?? '') && !(edge.source === selectedNode.id && edge.sourceHandle === branch)); return <option key={node.id} value={node.id} disabled={unavailable}>{node.data.label}</option> })}{branch === 'ng' && <optgroup label="前の工程へ戻る">{previousNodes.map((node) => <option key={node.id} value={`return:${node.id}`}>{node.data.label}へ戻る</option>)}</optgroup>}</select></label>
                   })}
                 </div>
+                {edges.some((edge) => edge.source === selectedNode.id && edge.sourceHandle === 'ng-return') && <label className="field-label">NG戻り上限 <span className="input-suffix"><input className="text-input" type="number" min="1" max="100" step="1" value={selectedNode.data.maxReturnCount ?? 3} onChange={(event) => updateData({ maxReturnCount: Number(event.target.value) })} /><span>回</span></span><small className="field-help">1〜100回。上限を超えると実行を終了します</small></label>}
                 <small className="field-help">先行する入力ノードの値を判定します。NG時は前工程へ戻すこともできます。</small>
                   </>
                 })()}
@@ -339,7 +340,7 @@ function WorkflowEditor() {
                 {(() => {
                   const previousNodes = getPreviousNodes(selectedNode.id, nodes, edges)
                   const returnTargetId = edges.find((edge) => edge.source === selectedNode.id && edge.sourceHandle === 'no-return')?.target ?? ''
-                  return <label className="field-label approval-return-field">「いいえ」の場合<select className="text-input select-input" value={returnTargetId} onChange={(event) => setApprovalReturnTarget(event.target.value)}><option value="">拒否して終了</option>{previousNodes.map((node) => <option key={node.id} value={node.id}>{node.data.label}へ戻る</option>)}</select></label>
+                  return <><label className="field-label approval-return-field">「いいえ」の場合<select className="text-input select-input" value={returnTargetId} onChange={(event) => setApprovalReturnTarget(event.target.value)}><option value="">拒否して終了</option>{previousNodes.map((node) => <option key={node.id} value={node.id}>{node.data.label}へ戻る</option>)}</select></label>{returnTargetId && <label className="field-label">いいえ戻り上限 <span className="input-suffix"><input className="text-input" type="number" min="1" max="100" step="1" value={selectedNode.data.maxReturnCount ?? 3} onChange={(event) => updateData({ maxReturnCount: Number(event.target.value) })} /><span>回</span></span><small className="field-help">1〜100回。上限を超えると実行を終了します</small></label>}</>
                 })()}
               </>}
               {selectedNode.type === 'trigger' && <div className="trigger-note"><Zap size={15} /><span>このフローは手動実行で開始します。テスト実行から起動できます。</span></div>}

@@ -1,8 +1,12 @@
 import { z } from 'zod'
 
+export const DEFAULT_MAX_RETURN_COUNT = 3
+export const MAX_RETURN_COUNT = 100
+
 const nodeDataSchema = z.object({
   label: z.string().min(1).max(80),
   seconds: z.number().int().min(1).max(86400).optional(),
+  maxReturnCount: z.number().int().min(1).max(MAX_RETURN_COUNT).optional(),
   url: z.string().url().optional(),
   method: z.enum(['GET', 'POST']).optional(),
   conditionField: z.enum(['inputA', 'inputB']).optional(),
@@ -39,6 +43,7 @@ export type WorkflowStep = {
   seconds?: number
   url?: string
   method?: 'GET' | 'POST'
+  maxReturnCount?: number
   conditionField?: ConditionField
   conditionOperator?: ConditionOperator
   conditionValue?: string
@@ -49,12 +54,14 @@ export type WorkflowPlan = {
   startStepId?: string
   nextById: Record<string, string>
   branchesById: Record<string, { ok: string; ng?: string }>
-  conditionNgReturnsById: Record<string, string>
-  approvalNoReturnsById: Record<string, string>
+  conditionNgReturnsById: Record<string, WorkflowReturnRoute>
+  approvalNoReturnsById: Record<string, WorkflowReturnRoute>
 }
 
+export type WorkflowReturnRoute = { targetId: string; maxReturns: number }
+
 export type WorkflowExecutionState = {
-  status: 'running' | 'waiting_delay' | 'waiting_approval' | 'waiting_page' | 'waiting_input' | 'rejected' | 'completed'
+  status: 'running' | 'waiting_delay' | 'waiting_approval' | 'waiting_page' | 'waiting_input' | 'rejected' | 'loop_limit_reached' | 'completed'
   currentStepId?: string
   currentStepLabel?: string
   currentUrl?: string
@@ -79,8 +86,8 @@ export function compileWorkflow(definition: WorkflowDefinition): WorkflowPlan {
 
   const nextBySource = new Map<string, string>()
   const branchesBySource = new Map<string, { ok?: string; ng?: string }>()
-  const conditionNgReturns = new Map<string, string>()
-  const approvalNoReturns = new Map<string, string>()
+  const conditionNgReturns = new Map<string, WorkflowReturnRoute>()
+  const approvalNoReturns = new Map<string, WorkflowReturnRoute>()
   const incoming = new Set<string>()
   for (const edge of edges) {
     if (!byId.has(edge.source) || !byId.has(edge.target)) {
@@ -95,7 +102,10 @@ export function compileWorkflow(definition: WorkflowDefinition): WorkflowPlan {
           : undefined
       if (!returns) throw new Error('戻り接続は条件NGまたは承認いいえからのみ設定できます')
       if (returns.has(edge.source)) throw new Error('同じ結果に複数の戻り先は設定できません')
-      returns.set(edge.source, edge.target)
+      returns.set(edge.source, {
+        targetId: edge.target,
+        maxReturns: source.data.maxReturnCount ?? DEFAULT_MAX_RETURN_COUNT,
+      })
       continue
     }
     if (incoming.has(edge.target)) {
@@ -163,7 +173,7 @@ export function compileWorkflow(definition: WorkflowDefinition): WorkflowPlan {
         }
       }
       if (current.type === 'approval' && approvalNoReturns.has(current.id)) {
-        const targetId = approvalNoReturns.get(current.id)!
+        const targetId = approvalNoReturns.get(current.id)!.targetId
         if (targetId === starts[0].id || targetId === current.id || !visiting.has(targetId)) {
           throw new Error(`「${current.data.label}」の戻り先には前のノードを選択してください`)
         }
@@ -175,7 +185,7 @@ export function compileWorkflow(definition: WorkflowDefinition): WorkflowPlan {
     if (branch?.ok) visit(branch.ok)
     if (branch?.ng) visit(branch.ng)
     if (current.type === 'condition' && conditionNgReturns.has(current.id)) {
-      const targetId = conditionNgReturns.get(current.id)!
+      const targetId = conditionNgReturns.get(current.id)!.targetId
       if (targetId === starts[0].id || targetId === current.id || !visiting.has(targetId)) {
         throw new Error(`「${current.data.label}」のNG戻り先には前のノードを選択してください`)
       }

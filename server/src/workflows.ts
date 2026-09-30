@@ -1,6 +1,6 @@
 import { condition, defineQuery, defineSignal, proxyActivities, setHandler, sleep, workflowInfo } from '@temporalio/workflow'
 import type * as activities from './activities.js'
-import { APPROVAL_SIGNAL, EXECUTION_STATE_QUERY, INPUT_VALUES_SIGNAL, PAGE_CONTINUE_SIGNAL, type ConditionField, type ConditionOperator, type WorkflowExecutionState, type WorkflowInputValues, type WorkflowPlan, type WorkflowStep } from './dsl.js'
+import { APPROVAL_SIGNAL, EXECUTION_STATE_QUERY, INPUT_VALUES_SIGNAL, PAGE_CONTINUE_SIGNAL, type ConditionField, type ConditionOperator, type WorkflowExecutionState, type WorkflowInputValues, type WorkflowPlan, type WorkflowReturnRoute, type WorkflowStep } from './dsl.js'
 
 const executionStateQuery = defineQuery<WorkflowExecutionState>(EXECUTION_STATE_QUERY)
 const approvalSignal = defineSignal<[decision: 'yes' | 'no']>(APPROVAL_SIGNAL)
@@ -12,12 +12,13 @@ const { sendWebhook } = proxyActivities<typeof activities>({
   retry: { maximumAttempts: 3 },
 })
 
-export async function runDslWorkflow(plan: WorkflowPlan): Promise<{ completed: number; status: 'completed' | 'rejected' }> {
+export async function runDslWorkflow(plan: WorkflowPlan): Promise<{ completed: number; status: 'completed' | 'rejected' | 'loop_limit_reached' }> {
   let state: WorkflowExecutionState = { status: 'running' }
   let approvalDecision: 'yes' | 'no' | undefined
   let pageContinued = false
   let inputValues: WorkflowInputValues | undefined
   const stepsById = new Map(plan.steps.map((step) => [step.id, step]))
+  const returnCounts = new Map<string, number>()
 
   setHandler(executionStateQuery, () => state)
   setHandler(approvalSignal, (decision) => {
@@ -29,6 +30,23 @@ export async function runDslWorkflow(plan: WorkflowPlan): Promise<{ completed: n
   setHandler(inputValuesSignal, (values) => {
     if (state.status === 'waiting_input' && inputValues === undefined) inputValues = values
   })
+
+  const attemptReturn = (step: WorkflowStep, route: WorkflowReturnRoute | undefined): 'returned' | 'limit_reached' | 'no_route' => {
+    if (!route) return 'no_route'
+    const returnCount = returnCounts.get(step.id) ?? 0
+    if (returnCount >= route.maxReturns) {
+      state = {
+        ...state,
+        status: 'loop_limit_reached',
+        message: `「${step.label}」からの戻り回数が上限の${route.maxReturns}回に達しました`,
+      }
+      return 'limit_reached'
+    }
+    returnCounts.set(step.id, returnCount + 1)
+    currentStepId = route.targetId
+    completed += 1
+    return 'returned'
+  }
 
   let currentStepId = plan.startStepId
   let completed = 0
@@ -60,12 +78,9 @@ export async function runDslWorkflow(plan: WorkflowPlan): Promise<{ completed: n
       state = { ...state, status: 'waiting_approval' }
       await condition(() => approvalDecision !== undefined)
       if (approvalDecision === 'no') {
-        const returnStepId = plan.approvalNoReturnsById[step.id]
-        if (returnStepId) {
-          currentStepId = returnStepId
-          completed += 1
-          continue
-        }
+        const returnResult = attemptReturn(step, plan.approvalNoReturnsById[step.id])
+        if (returnResult === 'returned') continue
+        if (returnResult === 'limit_reached') return { completed, status: 'loop_limit_reached' }
         state = { ...state, status: 'rejected', message: '拒否されました' }
         return { completed, status: 'rejected' }
       }
@@ -80,9 +95,14 @@ export async function runDslWorkflow(plan: WorkflowPlan): Promise<{ completed: n
       state = { ...state, inputValues }
     } else if (step.type === 'condition') {
       const matched = evaluateCondition(step, inputValues)
-      currentStepId = matched
-        ? plan.branchesById[step.id].ok
-        : plan.conditionNgReturnsById[step.id] ?? plan.branchesById[step.id].ng
+      if (matched) {
+        currentStepId = plan.branchesById[step.id].ok
+      } else {
+        const returnResult = attemptReturn(step, plan.conditionNgReturnsById[step.id])
+        if (returnResult === 'returned') continue
+        if (returnResult === 'limit_reached') return { completed, status: 'loop_limit_reached' }
+        currentStepId = plan.branchesById[step.id].ng
+      }
       if (!currentStepId) throw new Error(`条件分岐の接続先がありません: ${step.id}`)
       completed += 1
       continue
