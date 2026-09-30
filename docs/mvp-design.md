@@ -4,6 +4,9 @@
 
 ワークフローノードを組み合わせてDSLを作成し、Temporal上で耐障害性のある処理として起動できるかを検証する。フロントエンドはReact/TypeScript、APIとWorkerはNode.js/TypeScript、パッケージ管理はYarn 1 workspaces。
 
+実装構成、DSLコンパイル、Temporal Workflowの実行モデルは[Temporal DSL実装設計書](architecture.md)を参照。
+編集画面の操作方法とテスト実行手順は[ワークフロー作成・実行ガイド](workflow-authoring-guide.md)を参照。
+
 ## MVPの範囲
 
 - ノード: 手動開始、入力、条件分岐、待機、Webhook送信（GET/POST）、承認、URL画面表示
