@@ -5,10 +5,12 @@ import { z } from 'zod'
 import {
   APPROVAL_SIGNAL,
   EXECUTION_STATE_QUERY,
+  INPUT_VALUES_SIGNAL,
   PAGE_CONTINUE_SIGNAL,
   compileWorkflow,
   workflowSchema,
   type WorkflowDefinition,
+  type WorkflowInputValues,
 } from './dsl.js'
 
 const app = express()
@@ -67,12 +69,12 @@ app.post('/api/workflows/:id/run', async (request, response) => {
   const definition = workflows.get(request.params.id)
   if (!definition) return response.status(404).json({ error: 'ワークフローが見つかりません。先に保存してください' })
   try {
-    const steps = compileWorkflow(definition)
+    const plan = compileWorkflow(definition)
     const client = await getTemporalClient()
     const handle = await client.workflow.start('runDslWorkflow', {
       taskQueue,
       workflowId: `${definition.id}-${Date.now()}`,
-      args: [steps],
+      args: [plan],
     })
     response.status(202).json({ workflowId: handle.workflowId, runId: handle.firstExecutionRunId })
   } catch (error) {
@@ -120,6 +122,26 @@ app.post('/api/executions/:workflowId/continue', async (request, response) => {
     response.status(202).json({ accepted: true })
   } catch (error) {
     response.status(404).json({ error: `次のノードへ進めません: ${error instanceof Error ? error.message : '実行が見つかりません'}` })
+  }
+})
+
+app.post('/api/executions/:workflowId/input', async (request, response) => {
+  const parsed = z.object({
+    inputA: z.string().min(1, '入力Aを入力してください'),
+    inputB: z.string().regex(/^\d+$/, '入力Bは数字のみ入力できます'),
+  }).safeParse(request.body)
+  if (!parsed.success) return response.status(400).json({ error: parsed.error.issues[0]?.message ?? '入力値が不正です' })
+  try {
+    const client = await getTemporalClient()
+    const handle = client.workflow.getHandle(request.params.workflowId)
+    const state = await handle.query<{ status: string }>(EXECUTION_STATE_QUERY)
+    if (state.status !== 'waiting_input') {
+      return response.status(409).json({ error: 'この実行は入力待ちではありません' })
+    }
+    await handle.signal(INPUT_VALUES_SIGNAL, parsed.data as WorkflowInputValues)
+    response.status(202).json({ accepted: true })
+  } catch (error) {
+    response.status(404).json({ error: `入力値を送信できません: ${error instanceof Error ? error.message : '実行が見つかりません'}` })
   }
 })
 

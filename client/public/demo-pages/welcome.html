@@ -22,6 +22,10 @@
       .success strong { font-size: 12px; }
       .success small { margin-top: 4px; color: #718476; font: 9px Consolas, monospace; }
       h2 { margin: 0 0 10px; color: #3a443a; font-size: 12px; }
+      .received-values { margin-top: 20px; padding: 13px 14px; border: 1px solid #dce7db; background: #fff; }
+      .received-values h2 { margin-bottom: 8px; color: #426d4b; }
+      .received-values p { display: flex; gap: 10px; margin: 5px 0 0; color: #59665b; font-size: 10px; }
+      .received-values strong { overflow-wrap: anywhere; font-weight: 500; }
       ol { margin: 0; padding: 0; list-style: none; }
       li { min-height: 55px; display: flex; align-items: center; gap: 13px; border-top: 1px solid #e2e6de; }
       li > span { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid #d4e1d4; border-radius: 50%; color: #497653; font: 9px Consolas, monospace; }
@@ -45,7 +49,22 @@
         <li><span>02</span><div><strong>利用開始の準備</strong><small>確認完了後、担当チームが準備します</small></div></li>
         <li><span>03</span><div><strong>ご案内をお届け</strong><small>登録されたメールアドレスにお送りします</small></div></li>
       </ol>
+      <section class="received-values" id="received-values" hidden>
+        <h2>ワークフローから受け取った値</h2>
+        <p>入力A <strong id="input-a-value"></strong></p>
+        <p>入力B <strong id="input-b-value"></strong></p>
+      </section>
       <footer>NORTHSTAR MEMBER SERVICES · SUPPORT DESK</footer>
     </main>
+    <script>
+      window.addEventListener('message', (event) => {
+        const message = event.data;
+        if (event.source !== window.parent || message?.type !== 'workflow-input-values') return;
+        if (typeof message.values?.inputA !== 'string' || typeof message.values?.inputB !== 'string') return;
+        document.getElementById('input-a-value').textContent = message.values.inputA;
+        document.getElementById('input-b-value').textContent = message.values.inputB;
+        document.getElementById('received-values').hidden = false;
+      });
+    </script>
   </body>
 </html>
