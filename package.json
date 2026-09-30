@@ -1,0 +1,19 @@
+{
+  "name": "temporal-workflow-studio",
+  "private": true,
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently -k \"yarn workspace client dev --host 0.0.0.0\" \"yarn workspace server dev:api\" \"yarn workspace server dev:worker\"",
+    "build": "yarn workspace client build && yarn workspace server build",
+    "lint": "yarn workspace client lint && yarn workspace server lint",
+    "dev:client": "yarn workspace client dev --host 0.0.0.0",
+    "dev:api": "yarn workspace server dev:api",
+    "dev:worker": "yarn workspace server dev:worker"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

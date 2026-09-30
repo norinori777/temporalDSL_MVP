@@ -1,0 +1,29 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap');
+
+:root {
+  font-family: 'DM Sans', 'Yu Gothic UI', sans-serif;
+  color: #20251f;
+  background: #f4f5f0;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-optical-sizing: auto;
+  font-weight: 400;
+  --ink: #20251f;
+  --muted: #7d8379;
+  --line: #e5e7df;
+  --paper: #fff;
+  --canvas: #f5f6f1;
+  --green: #236c4b;
+  --green-dark: #18553a;
+  --green-soft: #e6f1e8;
+  --orange: #c96b43;
+  --mono: 'DM Mono', Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+body { min-width: 360px; min-height: 100vh; margin: 0; }
+button, input, select { font: inherit; }
+button { color: inherit; }
+::selection { color: #173e2c; background: #cce5d1; }
