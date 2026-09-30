@@ -48,7 +48,9 @@ export type WorkflowPlan = {
   steps: WorkflowStep[]
   startStepId?: string
   nextById: Record<string, string>
-  branchesById: Record<string, { ok: string; ng: string }>
+  branchesById: Record<string, { ok: string; ng?: string }>
+  conditionNgReturnsById: Record<string, string>
+  approvalNoReturnsById: Record<string, string>
 }
 
 export type WorkflowExecutionState = {
@@ -77,17 +79,30 @@ export function compileWorkflow(definition: WorkflowDefinition): WorkflowPlan {
 
   const nextBySource = new Map<string, string>()
   const branchesBySource = new Map<string, { ok?: string; ng?: string }>()
+  const conditionNgReturns = new Map<string, string>()
+  const approvalNoReturns = new Map<string, string>()
   const incoming = new Set<string>()
   for (const edge of edges) {
     if (!byId.has(edge.source) || !byId.has(edge.target)) {
       throw new Error('接続先のノードが見つかりません')
+    }
+    const source = byId.get(edge.source)!
+    if (edge.sourceHandle === 'ng-return' || edge.sourceHandle === 'no-return') {
+      const returns = edge.sourceHandle === 'ng-return' && source.type === 'condition'
+        ? conditionNgReturns
+        : edge.sourceHandle === 'no-return' && source.type === 'approval'
+          ? approvalNoReturns
+          : undefined
+      if (!returns) throw new Error('戻り接続は条件NGまたは承認いいえからのみ設定できます')
+      if (returns.has(edge.source)) throw new Error('同じ結果に複数の戻り先は設定できません')
+      returns.set(edge.source, edge.target)
+      continue
     }
     if (incoming.has(edge.target)) {
       throw new Error('同じノードに複数の接続はできません')
     }
     incoming.add(edge.target)
 
-    const source = byId.get(edge.source)!
     if (source.type === 'condition') {
       if (edge.sourceHandle !== 'ok' && edge.sourceHandle !== 'ng') {
         throw new Error('条件ノードの接続はOKまたはNGの分岐先を選択してください')
@@ -140,8 +155,17 @@ export function compileWorkflow(definition: WorkflowDefinition): WorkflowPlan {
           throw new Error('入力Bの比較値は数字のみ入力できます')
         }
         const branches = branchesBySource.get(current.id)
-        if (!branches?.ok || !branches.ng) {
-          throw new Error(`「${current.data.label}」のOKとNGの接続先を選択してください`)
+        if (branches?.ng && conditionNgReturns.has(current.id)) {
+          throw new Error(`「${current.data.label}」のNG接続先と戻り先はどちらか一方を設定してください`)
+        }
+        if (!branches?.ok || (!branches.ng && !conditionNgReturns.has(current.id))) {
+          throw new Error(`「${current.data.label}」のOKとNGの接続先または戻り先を選択してください`)
+        }
+      }
+      if (current.type === 'approval' && approvalNoReturns.has(current.id)) {
+        const targetId = approvalNoReturns.get(current.id)!
+        if (targetId === starts[0].id || targetId === current.id || !visiting.has(targetId)) {
+          throw new Error(`「${current.data.label}」の戻り先には前のノードを選択してください`)
         }
       }
       ordered.push(current)
@@ -150,6 +174,12 @@ export function compileWorkflow(definition: WorkflowDefinition): WorkflowPlan {
     const branch = branchesBySource.get(current.id)
     if (branch?.ok) visit(branch.ok)
     if (branch?.ng) visit(branch.ng)
+    if (current.type === 'condition' && conditionNgReturns.has(current.id)) {
+      const targetId = conditionNgReturns.get(current.id)!
+      if (targetId === starts[0].id || targetId === current.id || !visiting.has(targetId)) {
+        throw new Error(`「${current.data.label}」のNG戻り先には前のノードを選択してください`)
+      }
+    }
     const nextId = nextBySource.get(current.id)
     if (nextId) visit(nextId)
     visiting.delete(nodeId)
@@ -157,11 +187,13 @@ export function compileWorkflow(definition: WorkflowDefinition): WorkflowPlan {
 
   visit(starts[0].id)
   if (visited.size !== nodes.length) throw new Error('開始ノードから到達できないノードがあります')
-  const branchesById = Object.fromEntries([...branchesBySource].map(([id, branches]) => [id, { ok: branches.ok!, ng: branches.ng! }]))
+  const branchesById = Object.fromEntries([...branchesBySource].map(([id, branches]) => [id, { ok: branches.ok!, ...(branches.ng ? { ng: branches.ng } : {}) }]))
   return {
     steps: ordered.flatMap((node) => node.type === 'trigger' ? [] : [{ id: node.id, type: node.type, ...node.data }]),
     startStepId: nextBySource.get(starts[0].id) ?? branchesById[starts[0].id]?.ok,
     nextById: Object.fromEntries(nextBySource),
     branchesById,
+    conditionNgReturnsById: Object.fromEntries(conditionNgReturns),
+    approvalNoReturnsById: Object.fromEntries(approvalNoReturns),
   }
 }

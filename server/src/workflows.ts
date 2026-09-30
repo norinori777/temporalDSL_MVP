@@ -60,6 +60,12 @@ export async function runDslWorkflow(plan: WorkflowPlan): Promise<{ completed: n
       state = { ...state, status: 'waiting_approval' }
       await condition(() => approvalDecision !== undefined)
       if (approvalDecision === 'no') {
+        const returnStepId = plan.approvalNoReturnsById[step.id]
+        if (returnStepId) {
+          currentStepId = returnStepId
+          completed += 1
+          continue
+        }
         state = { ...state, status: 'rejected', message: '拒否されました' }
         return { completed, status: 'rejected' }
       }
@@ -69,12 +75,15 @@ export async function runDslWorkflow(plan: WorkflowPlan): Promise<{ completed: n
       await condition(() => pageContinued)
     } else if (step.type === 'input') {
       inputValues = undefined
-      state = { ...state, status: 'waiting_input' }
+      state = { status: 'waiting_input', currentStepId: step.id, currentStepLabel: step.label }
       await condition(() => inputValues !== undefined)
       state = { ...state, inputValues }
     } else if (step.type === 'condition') {
       const matched = evaluateCondition(step, inputValues)
-      currentStepId = plan.branchesById[step.id][matched ? 'ok' : 'ng']
+      currentStepId = matched
+        ? plan.branchesById[step.id].ok
+        : plan.conditionNgReturnsById[step.id] ?? plan.branchesById[step.id].ng
+      if (!currentStepId) throw new Error(`条件分岐の接続先がありません: ${step.id}`)
       completed += 1
       continue
     }
